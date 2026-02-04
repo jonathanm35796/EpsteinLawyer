@@ -3,6 +3,7 @@
 # Flask is used for the optional web UI
 flask
 requests
+pillow
 # 
 # System dependencies (see README.md for install):
 # - poppler (provides pdftotext, pdfinfo)

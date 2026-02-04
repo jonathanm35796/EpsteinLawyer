@@ -43,6 +43,9 @@ PAGE_TEMPLATE = """
   <style>
     body { font-family: Arial, sans-serif; margin: 2rem; }
     .section { margin-bottom: 2rem; }
+    .tabs { margin-bottom: 1rem; }
+    .tab { display: inline-block; margin-right: 0.75rem; padding: 0.5rem 1rem; border: 1px solid #ccc; border-radius: 4px; text-decoration: none; color: #333; }
+    .tab.active { background: #333; color: #fff; }
     table { border-collapse: collapse; width: 100%; }
     th, td { border: 1px solid #ddd; padding: 8px; }
     th { background: #f4f4f4; }
@@ -52,6 +55,12 @@ PAGE_TEMPLATE = """
 <body>
   <h1>Epstein Document Archive Search</h1>
 
+  <div class="tabs">
+    <a class="tab {% if tab == 'text' %}active{% endif %}" href="/?tab=text">Text</a>
+    <a class="tab {% if tab == 'images' %}active{% endif %}" href="/?tab=images">Images</a>
+  </div>
+
+  {% if tab == 'text' %}
   <div class="section">
     <h2>Search Text Documents</h2>
     <form method="get">
@@ -60,25 +69,45 @@ PAGE_TEMPLATE = """
     </form>
     {% if query %}
       <p>Results for: <strong>{{ query }}</strong></p>
-      <table>
-        <tr>
-          <th>File</th>
-          <th>Page</th>
-          <th>Snippet</th>
-        </tr>
-        {% for row in results %}
-          <tr>
-            <td><a href="/view?path={{ row[0] }}&page={{ row[1] }}" target="_blank">{{ row[0] }}</a></td>
-            <td>{{ row[1] }}</td>
-            <td class="snippet">{{ row[2] }}</td>
-          </tr>
-        {% endfor %}
-      </table>
     {% endif %}
+    <table>
+      <tr>
+        <th>File</th>
+        <th>Page</th>
+        <th>Snippet</th>
+      </tr>
+      {% for row in results %}
+        <tr>
+          <td><a href="/view?path={{ row[0] }}&page={{ row[1] }}" target="_blank">{{ row[0] }}</a></td>
+          <td>{{ row[1] }}</td>
+          <td class="snippet">{{ row[2] }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+    <p>Page {{ page }} of {{ total_pages }} ({{ total_results }} results)</p>
+    <div>
+      {% if page > 1 %}
+        <a href="/?tab=text&q={{ query }}&page={{ page - 1 }}">Prev</a>
+      {% endif %}
+      {% if page < total_pages %}
+        <a href="/?tab=text&q={{ query }}&page={{ page + 1 }}">Next</a>
+      {% endif %}
+    </div>
+    <form method="get" style="margin-top: 0.75rem;">
+      <input type="hidden" name="tab" value="text" />
+      <input type="hidden" name="q" value="{{ query }}" />
+      <label>Go to page:
+        <input type="number" name="page" min="1" max="{{ total_pages }}" value="{{ page }}" style="width: 6rem;" />
+      </label>
+      <button type="submit">Go</button>
+    </form>
+    </div>
+
+  {% elif tab == 'images' %}
   </div>
 
   <div class="section">
-    <h2>Image/Scanned PDFs (latest 50)</h2>
+    <h2>Image/Scanned PDFs</h2>
     <table>
       <tr>
         <th>Filename</th>
@@ -93,7 +122,24 @@ PAGE_TEMPLATE = """
           </tr>
       {% endfor %}
     </table>
+    <p>Page {{ image_page }} of {{ image_total_pages }} ({{ image_total_results }} images)</p>
+    <div>
+      {% if image_page > 1 %}
+        <a href="/?tab=images&image_page={{ image_page - 1 }}">Prev</a>
+      {% endif %}
+      {% if image_page < image_total_pages %}
+        <a href="/?tab=images&image_page={{ image_page + 1 }}">Next</a>
+      {% endif %}
+    </div>
+    <form method="get" style="margin-top: 0.75rem;">
+      <input type="hidden" name="tab" value="images" />
+      <label>Go to page:
+        <input type="number" name="image_page" min="1" max="{{ image_total_pages }}" value="{{ image_page }}" style="width: 6rem;" />
+      </label>
+      <button type="submit">Go</button>
+    </form>
   </div>
+  {% endif %}
 </body>
 </html>
 """
@@ -104,20 +150,86 @@ def _connect_readonly(db_path: Path) -> sqlite3.Connection:
     return sqlite3.connect(uri, uri=True, timeout=5)
 
 
-def query_text(term: str):
+def query_text(term: str, limit: int, offset: int):
     for attempt in range(3):
         try:
             conn = _connect_readonly(TEXT_DB)
             cursor = conn.cursor()
+            if term:
+                cursor.execute(
+                    """
+                    SELECT d.filepath, c.page_number, substr(c.extracted_text, 1, 300)
+                    FROM content c
+                    JOIN documents d ON c.document_id = d.id
+                    WHERE c.extracted_text LIKE ?
+                    LIMIT ? OFFSET ?
+                    """,
+                    (f"%{term}%", limit, offset)
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT d.filepath, c.page_number, substr(c.extracted_text, 1, 300)
+                    FROM content c
+                    JOIN documents d ON c.document_id = d.id
+                    LIMIT ? OFFSET ?
+                    """,
+                    (limit, offset)
+                )
+            rows = cursor.fetchall()
+            conn.close()
+            return rows
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower() and attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            raise
+
+
+def count_text(term: str) -> int:
+    for attempt in range(3):
+        try:
+            conn = _connect_readonly(TEXT_DB)
+            cursor = conn.cursor()
+            if term:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM content c
+                    WHERE c.extracted_text LIKE ?
+                    """,
+                    (f"%{term}%",)
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM content c
+                    """
+                )
+            total = cursor.fetchone()[0]
+            conn.close()
+            return total
+        except sqlite3.OperationalError as exc:
+            if "locked" in str(exc).lower() and attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+                continue
+            raise
+
+
+def list_images(limit: int, offset: int):
+    for attempt in range(3):
+        try:
+            conn = _connect_readonly(IMAGES_DB)
+            cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT d.filepath, c.page_number, substr(c.extracted_text, 1, 300)
-                FROM content c
-                JOIN documents d ON c.document_id = d.id
-                WHERE c.extracted_text LIKE ?
-                LIMIT 50
+                SELECT filename, source_type, filepath
+                FROM images
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
                 """,
-                (f"%{term}%",)
+                (limit, offset)
             )
             rows = cursor.fetchall()
             conn.close()
@@ -129,17 +241,15 @@ def query_text(term: str):
             raise
 
 
-def list_images():
+def count_images() -> int:
     for attempt in range(3):
         try:
             conn = _connect_readonly(IMAGES_DB)
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT filename, source_type, filepath FROM images ORDER BY id DESC LIMIT 50"
-            )
-            rows = cursor.fetchall()
+            cursor.execute("SELECT COUNT(*) FROM images")
+            total = cursor.fetchone()[0]
             conn.close()
-            return rows
+            return total
         except sqlite3.OperationalError as exc:
             if "locked" in str(exc).lower() and attempt < 2:
                 time.sleep(0.5 * (attempt + 1))
@@ -152,10 +262,44 @@ def index():
     auth = request.authorization
     if not auth or not (auth.username == APP_USER and auth.password == APP_PASS):
         return _auth_required()
+    tab = request.args.get("tab", "text").strip().lower()
+    if tab not in {"images", "text"}:
+        tab = "images"
     query = request.args.get("q", "").strip()
-    results = query_text(query) if query else []
-    images = list_images()
-    return render_template_string(PAGE_TEMPLATE, query=query, results=results, images=images)
+    page = max(int(request.args.get("page", "1")), 1)
+    per_page = 50
+    image_page = max(int(request.args.get("image_page", "1")), 1)
+    image_per_page = 50
+    total_results = 0
+    total_pages = 1
+    results = []
+    image_total_results = 0
+    image_total_pages = 1
+    images = []
+
+    if tab == "text":
+        total_results = count_text(query)
+        total_pages = max((total_results + per_page - 1) // per_page, 1)
+        offset = (page - 1) * per_page
+        results = query_text(query, per_page, offset)
+    else:
+        image_total_results = count_images()
+        image_total_pages = max((image_total_results + image_per_page - 1) // image_per_page, 1)
+        image_offset = (image_page - 1) * image_per_page
+        images = list_images(image_per_page, image_offset)
+    return render_template_string(
+        PAGE_TEMPLATE,
+        tab=tab,
+        query=query,
+        results=results,
+        images=images,
+        page=page,
+        total_pages=total_pages,
+        total_results=total_results,
+        image_page=image_page,
+        image_total_pages=image_total_pages,
+        image_total_results=image_total_results,
+    )
 
 
 @app.route("/view", methods=["GET"])

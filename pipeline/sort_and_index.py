@@ -22,7 +22,8 @@ from utils import (
     is_text_pdf,
     extract_pdf_text,
     get_file_type,
-    safe_filename
+    safe_filename,
+    is_blank_image
 )
 
 
@@ -40,6 +41,8 @@ VERBOSE = True
 CLASSIFY_PROGRESS_EVERY = 500
 INDEX_TEXT_PROGRESS_EVERY = 50
 INDEX_IMAGE_PROGRESS_EVERY = 200
+BLANK_IMAGE_PROGRESS_EVERY = 200
+BLANK_IMAGE_RATIO = 0.98
 
 
 def setup_directories() -> None:
@@ -280,6 +283,53 @@ def index_images(db_path: Path) -> int:
     return indexed
 
 
+def cleanup_blank_images(db_path: Path) -> int:
+    """Remove near-blank images (>=98% black) from disk and database."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, filepath FROM images")
+    rows = cursor.fetchall()
+    total_target = len(rows)
+    if total_target == 0:
+        conn.close()
+        return 0
+
+    print("\nCleaning up blank images...")
+    deleted = 0
+    processed = 0
+    start_time = time.time()
+
+    for image_id, filepath_str in rows:
+        processed += 1
+        filepath = Path(filepath_str)
+        if not filepath.exists():
+            cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
+            deleted += 1
+            continue
+
+        if is_blank_image(filepath, black_ratio=BLANK_IMAGE_RATIO):
+            try:
+                filepath.unlink(missing_ok=True)
+            except Exception:
+                pass
+            cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
+            deleted += 1
+
+        if VERBOSE and processed % BLANK_IMAGE_PROGRESS_EVERY == 0:
+            elapsed = max(time.time() - start_time, 0.001)
+            rate = processed / elapsed
+            remaining = max(total_target - processed, 0)
+            eta_seconds = int(remaining / rate) if rate > 0 else 0
+            print(f"  Scanned {processed}/{total_target} images | Deleted: {deleted} | ETA: {eta_seconds}s...")
+            conn.commit()
+
+    conn.commit()
+    conn.close()
+    print(f"✓ Deleted {deleted} blank images")
+    return deleted
+
+
 def print_summary(text_db: Path, images_db: Path) -> None:
     """Print summary of indexed content."""
     print("\n" + "="*60)
@@ -348,7 +398,10 @@ def main():
     # Step 6: Index images
     index_images(images_db)
     
-    # Step 7: Print summary
+    # Step 7: Cleanup blank images
+    cleanup_blank_images(images_db)
+
+    # Step 8: Print summary
     print_summary(text_db, images_db)
     
     elapsed = datetime.now() - start_time

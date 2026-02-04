@@ -8,8 +8,11 @@ import hashlib
 import subprocess
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Literal
+
+from PIL import Image
 
 
 def calculate_checksum(filepath: Path, algorithm: str = "md5") -> str:
@@ -34,6 +37,59 @@ def resolve_poppler_binary(binary_name: str) -> str:
         return str(default_path)
 
     return binary_name  # Let subprocess raise if not found
+
+
+def render_pdf_first_page(pdf_path: Path) -> Image.Image | None:
+    """Render the first page of a PDF to a PIL image using pdftoppm."""
+    try:
+        pdftoppm = resolve_poppler_binary("pdftoppm")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_prefix = Path(temp_dir) / "page"
+            subprocess.run(
+                [
+                    pdftoppm,
+                    "-f", "1",
+                    "-l", "1",
+                    "-singlefile",
+                    "-png",
+                    str(pdf_path),
+                    str(output_prefix)
+                ],
+                capture_output=True,
+                timeout=60
+            )
+            output_file = output_prefix.with_suffix(".png")
+            if not output_file.exists():
+                return None
+            return Image.open(output_file)
+    except Exception:
+        return None
+
+
+def is_blank_image(filepath: Path, black_threshold: int = 10, black_ratio: float = 0.98) -> bool:
+    """Detect near-blank images by measuring percentage of black pixels."""
+    image = None
+    if filepath.suffix.lower() == ".pdf":
+        image = render_pdf_first_page(filepath)
+    else:
+        try:
+            image = Image.open(filepath)
+        except Exception:
+            return False
+
+    if image is None:
+        return False
+
+    try:
+        grayscale = image.convert("L")
+        histogram = grayscale.histogram()
+        total_pixels = sum(histogram)
+        black_pixels = sum(histogram[: black_threshold + 1])
+        if total_pixels == 0:
+            return False
+        return (black_pixels / total_pixels) >= black_ratio
+    except Exception:
+        return False
 
 
 def is_text_pdf(pdf_path: Path, char_threshold: int = 100, max_pages: int = 5) -> bool:
