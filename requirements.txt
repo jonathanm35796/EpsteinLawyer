@@ -1,0 +1,9 @@
+# Epstein Document Archive - Python Dependencies
+# No external Python packages required for pipeline (uses standard library)
+# Flask is used for the optional web UI
+flask
+requests
+# 
+# System dependencies (see README.md for install):
+# - poppler (provides pdftotext, pdfinfo)
+# - tesseract (for future OCR, optional for now)
