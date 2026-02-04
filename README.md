@@ -1,6 +1,6 @@
 # Epstein Document Archive
 
-A Python pipeline to extract, classify, and index PDF documents from the Epstein files archive.
+A Python pipeline and Flask UI to extract, classify, index, and query the Epstein files archive.
 
 **Created:** 2026-02-03  
 **Author:** Jonathan + Sales Tax
@@ -9,49 +9,55 @@ A Python pipeline to extract, classify, and index PDF documents from the Epstein
 
 ## Overview
 
-This pipeline:
-1. **Extracts** 12 zip files containing PDF documents
-2. **Classifies** each PDF as text-extractable or image/scanned (without viewing)
-3. **Indexes** text PDFs into a searchable SQLite database
-4. **Stores** image/scanned PDFs and images in a separate database for future OCR
+This project:
+1. **Extracts** zip archives containing PDFs and images.
+2. **Classifies** PDFs into text vs scanned/image-based without viewing contents.
+3. **Indexes** text PDFs into a searchable SQLite database.
+4. **Stores** scanned PDFs/images in a separate database for OCR/vision later.
+5. **Exposes** a Flask UI + REST API for querying and AI integration.
 
 ### Token Safety
-- Images never enter the context window
-- Only extracted TEXT is stored in SQLite
-- Queries return filepath + snippet
-- Images analyzed only if deliberately chosen (one at a time)
+- Images never enter the context window.
+- Only extracted TEXT is stored in SQLite.
+- Queries return filepath + snippet.
+- Images are analyzed only if deliberately chosen (one at a time).
 
 ---
 
 ## Prerequisites
 
-### Install Poppler (Required)
+### Python Dependencies
+
+```powershell
+pip install -r requirements.txt
+```
+
+### Poppler (Required)
 
 Poppler provides `pdftotext` and `pdfinfo` for PDF text extraction.
 
-**Windows (using Chocolatey):**
+**Windows (Chocolatey):**
 ```powershell
-# Install Chocolatey first if you don't have it:
+# Install Chocolatey if needed
 Set-ExecutionPolicy Bypass -Scope Process -Force
 [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
 iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
 
-# Then install poppler:
+# Install Poppler
 choco install poppler -y
 ```
 
 **Windows (Manual):**
-1. Download from: https://github.com/oschwartz10612/poppler-windows/releases
+1. Download: https://github.com/oschwartz10612/poppler-windows/releases
 2. Extract to `C:\Program Files\poppler`
 3. Add `C:\Program Files\poppler\Library\bin` to your PATH
 
-**Verify installation:**
+**Verify:**
 ```powershell
 pdftotext -v
 ```
 
-### Install Tesseract (Optional - for future OCR)
-
+### Tesseract (Optional, for future OCR)
 ```powershell
 choco install tesseract -y
 ```
@@ -69,97 +75,142 @@ C:\Users\JonathanSMcFarland\EpsteinLawyer\
 ├── raw/                     # Extracted files from zips
 ├── text-docs/               # Text-extractable PDFs
 ├── images/                  # Scanned PDFs + image files
+├── icons/                   # UI icons
 ├── db/
 │   ├── text_docs.sqlite     # Searchable text database
 │   └── images.sqlite        # Image metadata database
+├── app.py                   # Flask UI + REST API
 ├── requirements.txt
 └── README.md
 ```
 
 ---
 
-## Quick Start
-
-### 1. Run the Pipeline
+## Quick Start (Pipeline)
 
 ```powershell
 cd C:\Users\JonathanSMcFarland\EpsteinLawyer
 python pipeline/sort_and_index.py
 ```
 
-This will:
-- Extract all zips from `C:\Users\JonathanSMcFarland\epstein-files-downloader\zips`
-- Classify each PDF (text vs image)
-- Index text documents into `db/text_docs.sqlite`
-- Store image references in `db/images.sqlite`
+**What it does:**
+- Extracts zips from `C:\Users\JonathanSMcFarland\epstein-files-downloader\zips`
+- Classifies PDFs as text vs image/scanned
+- Indexes text into `db/text_docs.sqlite`
+- Stores image metadata in `db/images.sqlite`
 
 ---
 
-## Web Search UI (Flask)
+## Web UI (Flask)
 
-Install dependencies:
-```powershell
-pip install -r requirements.txt
-```
-
-Run the web app:
+### Run the app
 ```powershell
 set APP_USER=bros
 set APP_PASS=homies
 python app.py
 ```
 
-Then open:
+Open:
 ```
 http://127.0.0.1:8080
 ```
 
+### Notes
+- Basic Auth is enabled (uses APP_USER/APP_PASS).
+- Search results now use **doc_id-based links** (no raw Windows paths).
+
 ---
 
-## Internet Access (Tunnel + Basic Auth)
+## REST API (for AI tools)
 
-### Option 1: Ngrok (Recommended)
-1) Install ngrok: https://ngrok.com/download
-2) Start the app (as above)
-3) In a new terminal, run:
-```powershell
-ngrok http 8080
+All endpoints require Basic Auth.
+
+### 1) Search
 ```
-4) Use the forwarded HTTPS URL provided by ngrok
-5) Browser will prompt for **Basic Auth** (username/password above)
+GET /api/search?q=bill+gates&page=1&per_page=50
+```
+Response:
+```json
+{
+  "query": "bill gates",
+  "total_results": 3,
+  "page": 1,
+  "per_page": 50,
+  "results": [
+    {
+      "doc_id": 12345,
+      "filepath": "...EFTA02730265.pdf",
+      "page": 1,
+      "snippet": "..."
+    }
+  ]
+}
+```
 
-### Option 2: Cloudflare Tunnel
-You can also use Cloudflare Tunnel if you prefer a free persistent URL.
-Let me know and I’ll add the full steps.
+### 2) Batch Search
+```
+POST /api/search/batch
+```
+Body:
+```json
+{ "names": ["bill gates", "ghislaine maxwell"] }
+```
+Response:
+```json
+{
+  "results": {
+    "bill gates": [ ... ],
+    "ghislaine maxwell": [ ... ]
+  }
+}
+```
+
+### 3) Stats
+```
+GET /api/stats
+```
+Response:
+```json
+{
+  "total_docs": 1234,
+  "total_pages": 45678,
+  "total_images": 890
+}
+```
+
+### 4) Full Text by Document
+```
+GET /api/text/<doc_id>
+```
+Response:
+```json
+{
+  "doc_id": 12345,
+  "filepath": "...EFTA02730265.pdf",
+  "pages": [
+    { "page": 1, "text": "..." },
+    { "page": 2, "text": "..." }
+  ]
+}
+```
 
 ---
 
-## Querying the Database
+## Direct SQLite Queries
 
 ### Search Text Documents
-
 ```powershell
-# Search for a term (e.g., "flight")
 sqlite3 "C:\Users\JonathanSMcFarland\EpsteinLawyer\db\text_docs.sqlite" "SELECT d.filepath, c.page_number, substr(c.extracted_text, 1, 300) FROM content c JOIN documents d ON c.document_id = d.id WHERE c.extracted_text LIKE '%flight%' LIMIT 10;"
 ```
 
-### List All Text Documents
-
+### List Documents
 ```powershell
 sqlite3 "C:\Users\JonathanSMcFarland\EpsteinLawyer\db\text_docs.sqlite" "SELECT id, filename FROM documents LIMIT 20;"
 ```
 
-### List All Images
-
+### List Images
 ```powershell
 sqlite3 "C:\Users\JonathanSMcFarland\EpsteinLawyer\db\images.sqlite" "SELECT filename, source_type FROM images LIMIT 20;"
-```
-
-### Get Full Page Content
-
-```powershell
-# Get document ID first, then:
-sqlite3 "C:\Users\JonathanSMcFarland\EpsteinLawyer\db\text_docs.sqlite" "SELECT extracted_text FROM content WHERE document_id = 1 AND page_number = 1;"
 ```
 
 ---
@@ -167,9 +218,7 @@ sqlite3 "C:\Users\JonathanSMcFarland\EpsteinLawyer\db\text_docs.sqlite" "SELECT 
 ## Database Schema
 
 ### text_docs.sqlite
-
 ```sql
--- Document metadata
 CREATE TABLE documents (
     id INTEGER PRIMARY KEY,
     filename TEXT,
@@ -178,7 +227,6 @@ CREATE TABLE documents (
     created_at TIMESTAMP
 );
 
--- Page content (searchable)
 CREATE TABLE content (
     id INTEGER PRIMARY KEY,
     document_id INTEGER,
@@ -186,31 +234,26 @@ CREATE TABLE content (
     extracted_text TEXT
 );
 
--- Full-text search index
 CREATE INDEX idx_content_text ON content(extracted_text);
 ```
 
 ### images.sqlite
-
 ```sql
--- Image/scanned PDF metadata
 CREATE TABLE images (
     id INTEGER PRIMARY KEY,
     filename TEXT,
     filepath TEXT UNIQUE,
     checksum TEXT,
     processed INTEGER DEFAULT 0,
-    source_type TEXT  -- 'scanned_pdf' or 'image'
+    source_type TEXT
 );
 
--- Ready for future OCR
 CREATE TABLE ocr_content (
     id INTEGER PRIMARY KEY,
     image_id INTEGER,
     ocr_text TEXT
 );
 
--- Ready for future AI descriptions
 CREATE TABLE descriptions (
     id INTEGER PRIMARY KEY,
     image_id INTEGER,
@@ -232,25 +275,13 @@ ZIP FILES → EXTRACT → CLASSIFY → SORT → INDEX
 
 ---
 
-## Future Extensions
-
-1. **OCR Processing**: Run Tesseract on scanned PDFs
-2. **AI Descriptions**: Generate descriptions for images
-3. **Full-Text Search**: Upgrade to SQLite FTS5 for faster searches
-4. **Web Interface**: Build a simple search UI
-
----
-
 ## Troubleshooting
 
 ### "pdftotext not found"
-Install poppler (see Prerequisites above) and ensure it's in your PATH.
-
-### "Permission denied"
-Run PowerShell as Administrator or check file permissions.
+Install Poppler and ensure `pdftotext` is in your PATH.
 
 ### "Zip file not found"
-Verify the zip files exist at:
+Verify zips exist at:
 `C:\Users\JonathanSMcFarland\epstein-files-downloader\zips`
 
 ---

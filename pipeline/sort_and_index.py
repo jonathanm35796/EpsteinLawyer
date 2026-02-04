@@ -23,7 +23,7 @@ from utils import (
     extract_pdf_text,
     get_file_type,
     safe_filename,
-    is_blank_image
+    pdf_first_page_contains
 )
 
 
@@ -42,7 +42,7 @@ CLASSIFY_PROGRESS_EVERY = 500
 INDEX_TEXT_PROGRESS_EVERY = 50
 INDEX_IMAGE_PROGRESS_EVERY = 200
 BLANK_IMAGE_PROGRESS_EVERY = 200
-BLANK_IMAGE_RATIO = 0.98
+NO_IMAGES_PHRASE = "No Images Produced"
 
 
 def setup_directories() -> None:
@@ -284,7 +284,7 @@ def index_images(db_path: Path) -> int:
 
 
 def cleanup_blank_images(db_path: Path) -> int:
-    """Remove near-blank images (>=98% black) from disk and database."""
+    """Remove PDFs whose first page contains 'No Images Produced'."""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
@@ -295,7 +295,7 @@ def cleanup_blank_images(db_path: Path) -> int:
         conn.close()
         return 0
 
-    print("\nCleaning up blank images...")
+    print("\nCleaning up PDFs with 'No Images Produced'...")
     deleted = 0
     processed = 0
     start_time = time.time()
@@ -308,13 +308,14 @@ def cleanup_blank_images(db_path: Path) -> int:
             deleted += 1
             continue
 
-        if is_blank_image(filepath, black_ratio=BLANK_IMAGE_RATIO):
+        if filepath.suffix.lower() == ".pdf" and pdf_first_page_contains(filepath, NO_IMAGES_PHRASE):
             try:
                 filepath.unlink(missing_ok=True)
             except Exception:
                 pass
             cursor.execute("DELETE FROM images WHERE id = ?", (image_id,))
             deleted += 1
+            continue
 
         if VERBOSE and processed % BLANK_IMAGE_PROGRESS_EVERY == 0:
             elapsed = max(time.time() - start_time, 0.001)
@@ -326,7 +327,7 @@ def cleanup_blank_images(db_path: Path) -> int:
 
     conn.commit()
     conn.close()
-    print(f"✓ Deleted {deleted} blank images")
+    print(f"✓ Deleted {deleted} PDFs containing '{NO_IMAGES_PHRASE}'")
     return deleted
 
 

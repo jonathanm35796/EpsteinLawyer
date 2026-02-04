@@ -66,6 +66,21 @@ def render_pdf_first_page(pdf_path: Path) -> Image.Image | None:
         return None
 
 
+def pdf_first_page_contains(pdf_path: Path, phrase: str) -> bool:
+    """Check if the first page text contains a phrase (case-insensitive)."""
+    try:
+        pdftotext = resolve_poppler_binary("pdftotext")
+        result = subprocess.run(
+            [pdftotext, "-f", "1", "-l", "1", str(pdf_path), "-"],
+            capture_output=True,
+            timeout=30
+        )
+        output_text = result.stdout.decode("utf-8", errors="ignore")
+        return phrase.lower() in output_text.lower()
+    except Exception:
+        return False
+
+
 def is_blank_image(filepath: Path, black_threshold: int = 10, black_ratio: float = 0.98) -> bool:
     """Detect near-blank images by measuring percentage of black pixels."""
     image = None
