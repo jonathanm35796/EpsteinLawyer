@@ -35,6 +35,55 @@ VIEW_TEMPLATE = """
 </html>
 """
 
+IMAGE_VIEW_TEMPLATE = """
+<!doctype html>
+<html>
+<head>
+  <title>Image Viewer</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 1.5rem; }
+    .nav { margin-bottom: 1rem; }
+    .nav a { margin-right: 1rem; }
+    img { max-width: 100%; height: auto; border: 1px solid #ddd; }
+    iframe { width: 100%; height: 85vh; border: none; }
+  </style>
+</head>
+<body>
+  <div class="nav">
+    <a href="/?tab=images&image_page={{ image_page }}">Back to Images</a>
+    {% if prev_id %}
+      <a href="/image?id={{ prev_id }}&image_page={{ image_page }}">Prev</a>
+    {% endif %}
+    {% if next_id %}
+      <a href="/image?id={{ next_id }}&image_page={{ image_page }}">Next</a>
+    {% endif %}
+  </div>
+  <h2>{{ filename }}</h2>
+  <p>Type: {{ source_type }}</p>
+  {% if is_pdf %}
+    <iframe src="/open?path={{ filepath }}"></iframe>
+  {% else %}
+    <img src="/open?path={{ filepath }}" alt="{{ filename }}" />
+  {% endif %}
+
+  <script>
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'ArrowRight') {
+        {% if next_id %}
+          window.location.href = "/image?id={{ next_id }}&image_page={{ image_page }}";
+        {% endif %}
+      }
+      if (event.key === 'ArrowLeft') {
+        {% if prev_id %}
+          window.location.href = "/image?id={{ prev_id }}&image_page={{ image_page }}";
+        {% endif %}
+      }
+    });
+  </script>
+</body>
+</html>
+"""
+
 PAGE_TEMPLATE = """
 <!doctype html>
 <html>
@@ -116,9 +165,9 @@ PAGE_TEMPLATE = """
       </tr>
       {% for row in images %}
           <tr>
-            <td><a href="/view?path={{ row[2] }}" target="_blank">{{ row[0] }}</a></td>
-            <td>{{ row[1] }}</td>
+            <td><a href="/image?id={{ row[0] }}&image_page={{ image_page }}" target="_blank">{{ row[1] }}</a></td>
             <td>{{ row[2] }}</td>
+            <td>{{ row[3] }}</td>
           </tr>
       {% endfor %}
     </table>
@@ -224,7 +273,7 @@ def list_images(limit: int, offset: int):
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT filename, source_type, filepath
+                SELECT id, filename, source_type, filepath
                 FROM images
                 ORDER BY id DESC
                 LIMIT ? OFFSET ?
@@ -255,6 +304,37 @@ def count_images() -> int:
                 time.sleep(0.5 * (attempt + 1))
                 continue
             raise
+
+
+def get_image_record(image_id: int):
+    conn = _connect_readonly(IMAGES_DB)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, filename, filepath, source_type FROM images WHERE id = ?",
+        (image_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+
+def get_prev_next_image_ids(image_id: int):
+    conn = _connect_readonly(IMAGES_DB)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id FROM images WHERE id > ? ORDER BY id ASC LIMIT 1",
+        (image_id,)
+    )
+    prev_row = cursor.fetchone()
+    cursor.execute(
+        "SELECT id FROM images WHERE id < ? ORDER BY id DESC LIMIT 1",
+        (image_id,)
+    )
+    next_row = cursor.fetchone()
+    conn.close()
+    prev_id = prev_row[0] if prev_row else None
+    next_id = next_row[0] if next_row else None
+    return prev_id, next_id
 
 
 @app.route("/", methods=["GET"])
@@ -299,6 +379,33 @@ def index():
         image_page=image_page,
         image_total_pages=image_total_pages,
         image_total_results=image_total_results,
+    )
+
+
+@app.route("/image", methods=["GET"])
+def view_image():
+    auth = request.authorization
+    if not auth or not (auth.username == APP_USER and auth.password == APP_PASS):
+        return _auth_required()
+    image_id = request.args.get("id")
+    image_page = request.args.get("image_page", "1")
+    if not image_id or not image_id.isdigit():
+        abort(404)
+    record = get_image_record(int(image_id))
+    if not record:
+        abort(404)
+    _, filename, filepath, source_type = record
+    prev_id, next_id = get_prev_next_image_ids(int(image_id))
+    is_pdf = Path(filepath).suffix.lower() == ".pdf"
+    return render_template_string(
+        IMAGE_VIEW_TEMPLATE,
+        filename=filename,
+        filepath=filepath,
+        source_type=source_type,
+        is_pdf=is_pdf,
+        prev_id=prev_id,
+        next_id=next_id,
+        image_page=image_page,
     )
 
 
